@@ -33,6 +33,12 @@ def get_model_architecture(model_config: ModelConfig) -> Tuple[Type[nn.Module], 
         and "MixtralForCausalLM" in architectures
     ):
         architectures = ["QuantMixtralForCausalLM"]
+    
+    supported_archs = ModelRegistry.get_supported_archs()
+    is_native_supported = any(arch in supported_archs
+                            for arch in architectures)
+    if not is_native_supported:
+        architectures = ["TransformersModelForCausalLM"]
 
     return ModelRegistry.resolve_model_cls(architectures)
 
