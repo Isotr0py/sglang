@@ -57,7 +57,7 @@ def batch():
 
 
 if __name__ == "__main__":
-    runtime = sgl.Runtime(model_path="meta-llama/Llama-2-7b-chat-hf")
+    runtime = sgl.Runtime(model_path="Qwen/Qwen2.5-0.5B-Instruct", tp_size=2)
     sgl.set_default_backend(runtime)
 
     # Run a single request

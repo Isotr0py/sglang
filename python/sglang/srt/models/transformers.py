@@ -60,10 +60,10 @@ def sglang_flash_attention_forward(
         key: torch.Tensor,
         value: torch.Tensor,
         attention_mask: torch.Tensor,
-        # Transformers kwargs
-        scaling: float = None,
         # sglang kwargs
         forward_batch: ForwardBatch,
+        # Transformers kwargs
+        scaling: float = None,
         attention_instances: list[RadixAttention] = None,
         **kwargs):
     self_attn: RadixAttention = attention_instances[module.layer_idx]
@@ -80,6 +80,18 @@ def sglang_flash_attention_forward(
 
 
 ALL_ATTENTION_FUNCTIONS["sglang"] = sglang_flash_attention_forward
+
+
+class HFColumnParallelLinear(ColumnParallelLinear):
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return super().forward(input)[0]
+
+
+class HFRowParallelLinear(RowParallelLinear):
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return super().forward(input)[0]
 
 
 def replace_tp_linear_class(orig_module: nn.Linear,
@@ -101,13 +113,13 @@ def replace_tp_linear_class(orig_module: nn.Linear,
     bias = orig_module.bias is not None
 
     if style == "colwise":
-        return ColumnParallelLinear(
+        return HFColumnParallelLinear(
             input_size,
             output_size,
             bias,
         )
     elif style == "rowwise":
-        return RowParallelLinear(
+        return HFRowParallelLinear(
             input_size,
             output_size,
             bias,
@@ -131,6 +143,7 @@ class TransformersModelForCausalLM(nn.Module):
         self.model: PreTrainedModel = AutoModel.from_config(
             self.config,
             attn_implementation="sglang",
+            torch_dtype=torch.float16,
             trust_remote_code=True,
         )
 
@@ -139,13 +152,14 @@ class TransformersModelForCausalLM(nn.Module):
 
         # Attention modifications (assumes 1 attention op per hidden layer)
         tp_size = get_tensor_model_parallel_world_size()
+        head_dim = (config.hidden_size // config.num_attention_heads) if not hasattr(config, "head_dim") else config.head_dim
         self.attention_instances = [
             RadixAttention(
                 num_heads=divide(config.num_attention_heads, tp_size),
-                head_size=config.head_dim,
+                head_dim=head_dim,
                 # NOTE: We use Llama scale as default, if it's set by
                 # Transformers, it's updated in vllm_flash_attention_forward
-                scaling=config.head_dim**-0.5,
+                scaling=head_dim**-0.5,
                 num_kv_heads=divide(config.num_key_value_heads, tp_size),
                 layer_id=i,
                 quant_config=None,
@@ -208,19 +222,22 @@ class TransformersModelForCausalLM(nn.Module):
         input_embeds: torch.Tensor = None,
         get_embedding: bool = False,
     ) -> LogitsProcessorOutput:
-        model_output = self.model(
+        assert get_embedding is False, "embedding is not supported yet"
+        aux_hidden_states = None
+        hidden_states = self.model(
             input_ids[None, ...],
             use_cache=False,
             position_ids=positions[None, ...],
             forward_batch=forward_batch,
             attention_instances=self.attention_instances,
             return_dict=False)[0][0, ...]  # we remove batch dimension for now
-        return model_output
 
-    def load_weights(self, weights: Iterable[Tuple[str,
-                                                   torch.Tensor]]) -> Set[str]:
+        return self.logits_processor(
+            input_ids, hidden_states, self.lm_head, forward_batch, aux_hidden_states
+        )
+
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         params_dict = dict(self.named_parameters())
-        loaded_params: Set[str] = set()
         for name, loaded_weight in weights:
             if name not in params_dict:
                 name = f"{self.model.base_model_prefix}.{name}"
@@ -229,5 +246,6 @@ class TransformersModelForCausalLM(nn.Module):
                 weight_loader = getattr(param, "weight_loader",
                                         default_weight_loader)
                 weight_loader(param, loaded_weight)
-                loaded_params.add(name)
-        return loaded_params
+
+
+EntryClass = [TransformersModelForCausalLM]

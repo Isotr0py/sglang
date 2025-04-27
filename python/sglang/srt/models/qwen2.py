@@ -445,4 +445,4 @@ class Qwen2ForCausalLM(nn.Module):
         self.model.load_kv_cache_scales(quantization_param_path)
 
 
-EntryClass = Qwen2ForCausalLM
+# EntryClass = Qwen2ForCausalLM
