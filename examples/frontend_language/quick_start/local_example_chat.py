@@ -57,7 +57,8 @@ def batch():
 
 
 if __name__ == "__main__":
-    runtime = sgl.Runtime(model_path="Qwen/Qwen2.5-0.5B-Instruct", tp_size=2)
+    # runtime = sgl.Runtime(model_path="Qwen/Qwen2.5-0.5B-Instruct", tp_size=2)
+    runtime = sgl.Runtime(model_path="ArthurZ/Ilama-3.2-1B", tp_size=2, trust_remote_code=True, max_total_tokens=1024)
     sgl.set_default_backend(runtime)
 
     # Run a single request
